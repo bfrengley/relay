@@ -118,10 +118,8 @@ func (rc *RelayClient) UploadFile(filepath, pass string) error {
 		progressbar.OptionShowBytes(true),
 		progressbar.OptionSetWriter(os.Stderr),
 		progressbar.OptionSetDescription("Uploading"),
+		progressbar.OptionSetRenderBlankState(true),
 	)
-	if err = pb.RenderBlank(); err != nil {
-		return err
-	}
 
 	enc := crypto.NewEncryptingReader(f, RawChunkSize, *key)
 
@@ -144,7 +142,9 @@ func (rc *RelayClient) UploadFile(filepath, pass string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println()
+
+	// progressbar doesn't print a newline when it finishes; do it ourselves
+	println()
 
 	if res.StatusCode == http.StatusOK {
 		log.Println("INFO: successfully uploaded", encryptedBytes, "bytes in", chunks, "chunks")
@@ -170,6 +170,14 @@ func (rc *RelayClient) DownloadFile(id, pass string) ([]byte, error) {
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		return nil, err
+	}
+
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf(
+			"download failed with status code %d and body \"%s\"",
+			res.StatusCode,
+			strings.TrimSpace(string(body)),
+		)
 	}
 
 	var meta files.FileMetadata
@@ -200,17 +208,22 @@ func (rc *RelayClient) DownloadFile(id, pass string) ([]byte, error) {
 		return nil, err
 	}
 
-	encryptedBytes, _ := encryptedSize(meta.Size)
+	if res.StatusCode != http.StatusOK {
+		body, _ = ioutil.ReadAll(res.Body)
+		return nil, fmt.Errorf(
+			"download failed with status code %d and body \"%s\"",
+			res.StatusCode,
+			strings.TrimSpace(string(body)),
+		)
+	}
 
 	pb := progressbar.NewOptions64(
-		int64(encryptedBytes),
+		int64(meta.Size),
 		progressbar.OptionShowBytes(true),
 		progressbar.OptionSetWriter(os.Stderr),
 		progressbar.OptionSetDescription("Downloading"),
+		progressbar.OptionSetRenderBlankState(true),
 	)
-	if err = pb.RenderBlank(); err != nil {
-		return nil, err
-	}
 
 	dec := crypto.NewDecryptingReader(res.Body, ChunkSize, *key)
 	file, err := io.ReadAll(io.TeeReader(dec, pb))
@@ -218,7 +231,8 @@ func (rc *RelayClient) DownloadFile(id, pass string) ([]byte, error) {
 		return nil, err
 	}
 
-	fmt.Println()
+	// progressbar doesn't print a newline when it finishes; do it ourselves
+	println()
 	log.Println("INFO: file downloaded and decrypted")
 	log.Println("INFO: checking decrypted file hash")
 	log.Println("INFO: expecting:", hex.EncodeToString(meta.Hash))
