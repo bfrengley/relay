@@ -1,8 +1,7 @@
 package main
 
 import (
-	"encoding/hex"
-	"fmt"
+	"flag"
 	"log"
 	"os"
 
@@ -10,11 +9,34 @@ import (
 )
 
 func main() {
-	file := os.Args[1]
-	hash, err := relay.HashFile(file)
-	if err != nil {
-		log.Fatalln(err)
+	var serverFlag = flag.String("server", "http://localhost:8080", "URL of the remote server")
+	var downloadFlag = flag.String("download", "", "Id of the file to download")
+	var uploadFlag = flag.String("upload", "", "Path to the file to upload")
+
+	flag.Parse()
+
+	if serverFlag == nil ||
+		*serverFlag == "" ||
+		(downloadFlag != nil && uploadFlag != nil && *downloadFlag != "" && *uploadFlag != "") ||
+		(*downloadFlag == "" && *uploadFlag == "") {
+		flag.Usage()
+		os.Exit(1)
 	}
 
-	fmt.Println(hex.EncodeToString(hash))
+	rc := relay.NewClient(*serverFlag)
+	if *uploadFlag != "" {
+		if err := rc.UploadFile(*uploadFlag, "thisisatestpassword"); err != nil {
+			log.Fatalln("ERR:", err)
+		}
+	} else if *downloadFlag != "" {
+		data, err := rc.DownloadFile(*downloadFlag, "thisisatestpassword")
+		if err != nil {
+			log.Fatalln("ERR:", err)
+		}
+		if data != nil {
+			if _, err = os.Stdout.Write(data); err != nil {
+				log.Fatalln("ERR:", err)
+			}
+		}
+	}
 }
