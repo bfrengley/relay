@@ -30,24 +30,40 @@ var (
 	ErrDecryptFailed      = errors.New("relay: decryption failed")
 )
 
-type encryptingReader struct {
+type chunkReader struct {
+	r       io.Reader
+	chunkFn func([KeySize]byte, []byte) ([]byte, error)
+
 	key       [KeySize]byte
 	chunkSize int
-	r         io.Reader
-	chunk     []byte
-	idx       int
+
+	chunk []byte
+	idx   int
 }
 
 func NewEncryptingReader(r io.Reader, chunkSize int, key [KeySize]byte) io.Reader {
-	return &encryptingReader{
+	return &chunkReader{
+		r:         r,
+		chunkFn:   EncryptChunk,
 		key:       key,
 		chunkSize: chunkSize,
-		r:         r,
 		idx:       0,
 	}
 }
 
-func (er *encryptingReader) Read(b []byte) (n int, err error) {
+func NewDecryptingReader(r io.Reader, chunkSize int, key [KeySize]byte) io.Reader {
+	return &chunkReader{
+		r: r,
+		chunkFn: func(key_ [KeySize]byte, data []byte) ([]byte, error) {
+			return DecryptChunk(key_, data, nil)
+		},
+		key:       key,
+		chunkSize: chunkSize,
+		idx:       0,
+	}
+}
+
+func (er *chunkReader) Read(b []byte) (n int, err error) {
 	l := len(b)
 
 	// generate the first encrypted chunk if necessary
@@ -73,7 +89,7 @@ func (er *encryptingReader) Read(b []byte) (n int, err error) {
 	return
 }
 
-func (er *encryptingReader) readNextChunk() error {
+func (er *chunkReader) readNextChunk() error {
 	data := make([]byte, er.chunkSize)
 	n, err := er.r.Read(data)
 	if n == 0 {
@@ -83,76 +99,13 @@ func (er *encryptingReader) readNextChunk() error {
 		return err
 	}
 
-	ciphertext, err := EncryptChunk(er.key, data[:n])
+	nextChunk, err := er.chunkFn(er.key, data[:n])
 	if err != nil {
 		return err
 	}
 
-	er.chunk = ciphertext
+	er.chunk = nextChunk
 	er.idx = 0
-	return nil
-}
-
-type decryptingReader struct {
-	key       [KeySize]byte
-	chunkSize int
-	r         io.Reader
-	chunk     []byte
-	idx       int
-}
-
-func NewDecryptingReader(r io.Reader, chunkSize int, key [KeySize]byte) io.Reader {
-	return &decryptingReader{
-		key:       key,
-		chunkSize: chunkSize,
-		r:         r,
-		idx:       0,
-	}
-}
-
-func (dr *decryptingReader) Read(b []byte) (n int, err error) {
-	l := len(b)
-
-	// generate the first decrypted chunk if necessary
-	if dr.chunk == nil {
-		err = dr.readNextChunk()
-		if err != nil {
-			return 0, err
-		}
-	}
-
-	var copied int
-	for n < l {
-		copied = copy(b[n:], dr.chunk[dr.idx:])
-		dr.idx += copied
-		n += copied
-
-		if dr.idx >= len(dr.chunk) {
-			if err = dr.readNextChunk(); err != nil {
-				return
-			}
-		}
-	}
-	return
-}
-
-func (dr *decryptingReader) readNextChunk() error {
-	data := make([]byte, dr.chunkSize)
-	n, err := dr.r.Read(data)
-	if n == 0 {
-		return io.EOF
-	}
-	if err != nil && err != io.EOF {
-		return err
-	}
-
-	plaintext, err := DecryptChunk(dr.key, data[:n], nil)
-	if err != nil {
-		return err
-	}
-
-	dr.chunk = plaintext
-	dr.idx = 0
 	return nil
 }
 
@@ -217,7 +170,7 @@ func EncryptChunk(key [KeySize]byte, chunk []byte) ([]byte, error) {
 }
 
 func DecryptChunk(key [KeySize]byte, ciphertext []byte, out []byte) ([]byte, error) {
-	if len(ciphertext) < NonceSize+secretbox.Overhead {
+	if len(ciphertext) < Overhead {
 		return nil, ErrCiphertextTooShort
 	}
 	nonce := new([NonceSize]byte)
